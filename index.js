@@ -7,11 +7,12 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (بالتخطي الذكي)';
+const PROJECT_NAME = 'بوسطة الشامل (بالمراقبة المصورة)';
 // ===================================================
 
-let globalNoData = false; // متغير ذكي لاكتشاف الأيام الفارغة
+let globalNoData = false; 
 
+// دالة إرسال الرسائل النصية
 async function sendTelegramMsg(text) {
     if (!TELEGRAM_TOKEN || !CHAT_ID) return; 
     try {
@@ -24,6 +25,33 @@ async function sendTelegramMsg(text) {
         });
     } catch (e) {
         console.error('خطأ في إرسال التليجرام:', e.message);
+    }
+}
+
+// دالة تصوير الشاشة وإرسالها للتليجرام
+async function sendTelegramPhoto(imagePath, captionText) {
+    if (!TELEGRAM_TOKEN || !CHAT_ID) return;
+    try {
+        const buffer = fs.readFileSync(imagePath);
+        const blob = new Blob([buffer], { type: 'image/png' });
+        const formData = new FormData();
+        formData.append('chat_id', CHAT_ID);
+        formData.append('photo', blob, 'screenshot.png');
+        if (captionText) {
+            formData.append('caption', `🔔 <b>${PROJECT_NAME}</b>\n${captionText}`);
+            formData.append('parse_mode', 'HTML');
+        }
+
+        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`;
+        await fetch(url, {
+            method: 'POST',
+            body: formData
+        });
+        
+        // مسح الصورة بعد إرسالها عشان منمليش مساحة السيرفر
+        fs.unlinkSync(imagePath);
+    } catch (e) {
+        console.error('خطأ في إرسال الصورة:', e.message);
     }
 }
 
@@ -65,7 +93,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل نظام التخطي الذكي للأيام الفارغة.');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل المراقبة المصورة للخطوات.');
 
     let browser = await puppeteer.launch({ 
         headless: true,
@@ -74,8 +102,10 @@ function getDateChunks(totalDays = 60, interval = 5) {
             '--disable-setuid-sandbox', 
             '--disable-web-security',
             '--disable-images',
-            '--max-old-space-size=6144'
-        ] 
+            '--max-old-space-size=6144',
+            '--window-size=1280,800' // تحديد حجم الشاشة عشان الصور تطلع واضحة
+        ],
+        defaultViewport: { width: 1280, height: 800 }
     });
     
     let page = await browser.newPage();
@@ -90,7 +120,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
             }
         });
         
-        // التقاط رسائل الموقع لمعرفة الأيام الفارغة
         p.on('dialog', async dialog => { 
             const msg = dialog.message() || '';
             console.log(`💬 رسالة من بوسطة: ${msg}`);
@@ -120,6 +149,11 @@ function getDateChunks(totalDays = 60, interval = 5) {
             page.keyboard.press('Enter')
         ]);
 
+        // تصوير شاشة النجاح في تسجيل الدخول
+        const loginPicPath = path.join(downloadPath, 'login.png');
+        await page.screenshot({ path: loginPicPath });
+        await sendTelegramPhoto(loginPicPath, '✅ تم تسجيل الدخول لبوسطة بنجاح.');
+
         const chunks = getDateChunks(60, 5); 
         console.log(`تم تقسيم الفترة إلى ${chunks.length} أجزاء (كل جزء 5 أيام).`);
 
@@ -130,9 +164,10 @@ function getDateChunks(totalDays = 60, interval = 5) {
             const maxAttempts = 4;
 
             while (!success && attempts < maxAttempts) {
-                globalNoData = false; // تصفير العداد لكل محاولة
+                globalNoData = false; 
                 attempts++;
-                console.log(`\n⏳ جاري سحب الجزء [${i + 1}/${chunks.length}]: من ${chunk.start} إلى ${chunk.end} (المحاولة ${attempts}/${maxAttempts})`);
+                const partMsg = `الجزء [${i + 1}/${chunks.length}]: من ${chunk.start} إلى ${chunk.end} (المحاولة ${attempts}/${maxAttempts})`;
+                console.log(`\n⏳ جاري سحب ${partMsg}`);
 
                 try {
                     await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
@@ -163,18 +198,22 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         if(execBtn) execBtn.click();
                     }); 
                     
-                    // الانتظار قليلاً لرؤية إذا ظهرت رسالة "لا توجد بيانات"
                     await new Promise(r => setTimeout(r, 4000));
                     
                     if (globalNoData) {
                         console.log('⏩ مفيش شحنات في الـ 5 أيام دول (تخطي ذكي فوراً)...');
-                        success = true; // نعتبره نجاح عشان يروح للجزء اللي بعده
+                        success = true; 
                         break; 
                     }
                     
                     await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
                     console.log('✅ الجدول ظهر، طلب الملف...');
                     
+                    // تصوير الجدول قبل التحميل
+                    const tablePicPath = path.join(downloadPath, `table_${i}.png`);
+                    await page.screenshot({ path: tablePicPath });
+                    await sendTelegramPhoto(tablePicPath, `✅ الجدول ظهر لـ ${partMsg}`);
+
                     const filesBefore = fs.readdirSync(downloadPath).length;
 
                     await page.evaluate(() => {
@@ -186,7 +225,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         const filesAfter = fs.readdirSync(downloadPath);
                         if (filesAfter.length > filesBefore) {
                             const latestFile = filesAfter.find(f => 
-                                // ⚠️ تم تقليل حجم الملف لـ 50 بايت لضمان سحب الملفات الصغيرة جداً
                                 !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 50
                             );
                             if (latestFile) {
@@ -204,14 +242,20 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         console.log(`📥 تم تحميل الجزء [${i + 1}] بنجاح!`);
                         success = true; 
                     } else {
-                        // لو الجدول ظهر ومفيش رسالة بس الملف منزلش
                         throw new Error("تأخر الملف (احتمال حظر من السيرفر أو الجدول فارغ بدون رسالة)");
                     }
 
                 } catch (error) {
                     console.log(`⚠️ المحاولة ${attempts} فشلت: ${error.message}`);
+                    
+                    // تصوير الشاشة وقت الخطأ
+                    const errorPicPath = path.join(downloadPath, `error_${i}_${attempts}.png`);
+                    await page.screenshot({ path: errorPicPath });
+                    await sendTelegramPhoto(errorPicPath, `⚠️ خطأ في ${partMsg}\n<code>${error.message}</code>`);
+
                     if (attempts < maxAttempts) {
                         console.log('🔄 جاري عمل (Hard Reset)...');
+                        await sendTelegramMsg('🔄 جاري عمل Hard Reset للمتصفح لتجاوز الحظر...');
                         try {
                             await browser.close(); 
                             browser = await puppeteer.launch({ 
@@ -221,8 +265,10 @@ function getDateChunks(totalDays = 60, interval = 5) {
                                     '--disable-setuid-sandbox', 
                                     '--disable-web-security',
                                     '--disable-images',
-                                    '--max-old-space-size=6144'
-                                ] 
+                                    '--max-old-space-size=6144',
+                                    '--window-size=1280,800'
+                                ],
+                                defaultViewport: { width: 1280, height: 800 }
                             });
                             
                             page = await browser.newPage();
@@ -243,6 +289,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         }
                     } else {
                         console.log(`❌ فشل نهائي للجزء [${i + 1}]. جاري التخطي...`);
+                        await sendTelegramMsg(`❌ فشل نهائي في سحب الجزء [${i + 1}] بعد 4 محاولات.`);
                     }
                 }
             }
@@ -252,7 +299,12 @@ function getDateChunks(totalDays = 60, interval = 5) {
         await page.goto('https://script.google.com/macros/s/AKfycbyca-1Xqh_69GQ8LgEqcNys6ZZ7UpwwwVK1I5-Q-CsrjTjpnndn6fHBeWNnyEcIDUk/exec', { 
             waitUntil: 'networkidle2' 
         });
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 8000)); // وقت إضافي لتحميل الفريمات
+
+        // تصوير صفحة الرفع
+        const gscriptPicPath = path.join(downloadPath, 'gscript.png');
+        await page.screenshot({ path: gscriptPicPath });
+        await sendTelegramPhoto(gscriptPicPath, '🔄 تم فتح صفحة الرفع وجاري تجهيز الملفات...');
 
         let targetFrame = null;
         for (const frame of page.frames()) {
@@ -277,11 +329,12 @@ function getDateChunks(totalDays = 60, interval = 5) {
         const fileInput = await targetFrame.$('#excelFile');
         
         const filesToUpload = fs.readdirSync(downloadPath)
-                                .filter(f => !f.endsWith('.crdownload'))
+                                .filter(f => !f.endsWith('.crdownload') && (f.endsWith('.xls') || f.endsWith('.xlsx') || f.endsWith('.csv')))
                                 .map(f => path.join(downloadPath, f));
 
         if (filesToUpload.length === 0) {
             console.log('⚠️ لم يتم تحميل أي ملفات. سيتم إنهاء السكريبت.');
+            await sendTelegramMsg('⚠️ <b>تنبيه:</b> انتهى الفحص ولم يتم العثور على أي ملفات لرفعها.');
             process.exit(0);
         }
 
@@ -294,10 +347,15 @@ function getDateChunks(totalDays = 60, interval = 5) {
         await new Promise(r => setTimeout(r, 120000)); 
         
         console.log('🎉 تم الرفع بنجاح!');
-        await sendTelegramMsg(`🎉 <b>نجح التحديث!</b>\nتم سحب الشحنات ورفع ${filesToUpload.length} ملفات بنجاح.`);
+        await sendTelegramMsg(`🎉 <b>نجح التحديث!</b>\nتم سحب الشحنات الشاملة ورفع ${filesToUpload.length} ملفات بنجاح.`);
 
     } catch (error) {
         console.error('❌ خطأ:', error.message);
+        try {
+            const fatalErrorPicPath = path.join(downloadPath, 'fatal_error.png');
+            await page.screenshot({ path: fatalErrorPicPath, fullPage: true });
+            await sendTelegramPhoto(fatalErrorPicPath, `❌ <b>توقف السكريبت بخطأ فادح:</b>\n<code>${error.message}</code>`);
+        } catch(e) {}
         process.exit(1);
     } finally {
         if (browser) await browser.close();
