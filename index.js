@@ -7,7 +7,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (بالمراقبة المصورة - الشكل الطبيعي)';
+const PROJECT_NAME = 'بوسطة الشامل (بالكتابة اليدوية للتواريخ)';
 // ===================================================
 
 let globalNoData = false; 
@@ -90,7 +90,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل المراقبة المصورة (الشكل الطبيعي للموقع).');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل ميزة الكتابة اليدوية للتواريخ لضمان استجابة الموقع.');
 
     let browser = await puppeteer.launch({ 
         headless: true,
@@ -98,7 +98,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
             '--disable-web-security',
-            // شيلنا الـ --disable-images من هنا عشان الصور تظهر
             '--max-old-space-size=6144',
             '--window-size=1280,800'
         ],
@@ -108,8 +107,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
     let page = await browser.newPage();
     
     async function setupPage(p) {
-        // شيلنا الكود اللي كان بيمنع الـ CSS والصور
-        
         p.on('dialog', async dialog => { 
             const msg = dialog.message() || '';
             console.log(`💬 رسالة من بوسطة: ${msg}`);
@@ -171,21 +168,29 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         };
                     });
 
-                    await page.evaluate((start, end) => {
-                        const fromInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_From_Date');
-                        const toInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_To_Date');
-                        if(fromInput && toInput) {
-                            fromInput.value = start;
-                            fromInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            toInput.value = end;
-                            toInput.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }, chunk.start, chunk.end);
+                    // 🌟 التعديل الجذري: كتابة التاريخ يدوياً 🌟
+                    const fromInputId = '#ArMainContent_UcFollowUpOrdersReport_Txt_From_Date';
+                    const toInputId = '#ArMainContent_UcFollowUpOrdersReport_Txt_To_Date';
+                    const execBtnId = '#ArMainContent_UcFollowUpOrdersReport_LnkExecs';
 
-                    await page.evaluate(() => {
-                        const execBtn = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs');
-                        if(execBtn) execBtn.click();
-                    }); 
+                    // انتظار ظهور الخانة في الصفحة
+                    await page.waitForSelector(fromInputId, { visible: true, timeout: 30000 });
+                    await new Promise(r => setTimeout(r, 2000)); // وقت لاستقرار الموقع
+
+                    // مسح الخانات وكتابة التاريخ زي ما الإنسان بيعمل
+                    await page.$eval(fromInputId, el => el.value = '');
+                    await page.type(fromInputId, chunk.start, { delay: 50 }); // حرف حرف
+
+                    await page.$eval(toInputId, el => el.value = '');
+                    await page.type(toInputId, chunk.end, { delay: 50 }); // حرف حرف
+
+                    // الضغط على زر Tab عشان الموقع يستوعب التغيير
+                    await page.keyboard.press('Tab');
+                    await new Promise(r => setTimeout(r, 1000));
+
+                    // الضغط على زرار البحث
+                    await page.waitForSelector(execBtnId, { visible: true });
+                    await page.click(execBtnId);
                     
                     await new Promise(r => setTimeout(r, 4000));
                     
@@ -198,6 +203,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
                     await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
                     console.log('✅ الجدول ظهر، طلب الملف...');
                     
+                    // تصوير الجدول (دلوقتي هتشوف التواريخ مكتوبة بوضوح في الصورة)
                     const tablePicPath = path.join(downloadPath, `table_${i}.png`);
                     await page.screenshot({ path: tablePicPath });
                     await sendTelegramPhoto(tablePicPath, `✅ الجدول ظهر لـ ${partMsg}`);
