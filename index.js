@@ -7,7 +7,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (إعادة تشغيل صارمة للجلسة)';
+const PROJECT_NAME = 'بوسطة الشامل (إعادة تشغيل صارمة للمتصفح)';
 // ===================================================
 
 async function sendTelegramMsg(text) {
@@ -63,9 +63,10 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nنظام الحماية مفعل: سيتم عمل Hard Reset للجلسة في حالة حظر السيرفر.');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nنظام الحماية مفعل: سيتم عمل Hard Reset للمتصفح بالكامل في حالة الحظر.');
 
-    const browser = await puppeteer.launch({ 
+    // تحويل browser لـ let عشان نقدر نعمله إعادة تشغيل
+    let browser = await puppeteer.launch({ 
         headless: true,
         args: [
             '--no-sandbox', 
@@ -76,27 +77,25 @@ function getDateChunks(totalDays = 60, interval = 5) {
         ] 
     });
     
-    // دالة مساعدة لإنشاء صفحة جديدة بالكامل مع إعداداتها
-    async function createNewPage() {
-        const newPage = await browser.newPage();
-        await newPage.setRequestInterception(true);
-        newPage.on('request', (req) => {
+    let page = await browser.newPage();
+    
+    // إعدادات الصفحة
+    async function setupPage(p) {
+        await p.setRequestInterception(true);
+        p.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
-        newPage.on('dialog', async dialog => { await dialog.accept(); });
-        newPage.setDefaultTimeout(120000); 
-        
-        const client = await newPage.target().createCDPSession();
+        p.on('dialog', async dialog => { await dialog.accept(); });
+        p.setDefaultTimeout(120000); 
+        const client = await p.target().createCDPSession();
         await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
-        
-        return newPage;
     }
 
-    let page = await createNewPage();
+    await setupPage(page);
 
     try {
         console.log('1️⃣ تسجيل الدخول الأول لبوسطة...');
@@ -190,16 +189,27 @@ function getDateChunks(totalDays = 60, interval = 5) {
                 } catch (error) {
                     console.log(`⚠️ المحاولة ${attempts} فشلت: ${error.message}`);
                     if (attempts < maxAttempts) {
-                        console.log('🔄 جاري عمل (Hard Reset): إغلاق الصفحة نهائياً وفتح جلسة جديدة من الصفر...');
+                        console.log('🔄 جاري عمل (Hard Reset): إغلاق المتصفح بالكامل وفتحه من جديد...');
                         try {
-                            // 1. تدمير الصفحة الحالية بالكامل لقطع الاتصال
-                            await page.close(); 
+                            // إغلاق المتصفح من الجذور
+                            await browser.close(); 
                             
-                            // 2. فتح صفحة جديدة بإعدادات نظيفة
-                            page = await createNewPage(); 
+                            // تشغيل متصفح جديد تماماً
+                            browser = await puppeteer.launch({ 
+                                headless: true,
+                                args: [
+                                    '--no-sandbox', 
+                                    '--disable-setuid-sandbox', 
+                                    '--disable-web-security',
+                                    '--disable-images',
+                                    '--max-old-space-size=6144'
+                                ] 
+                            });
                             
-                            // 3. تسجيل الدخول من جديد
-                            console.log('🔐 تسجيل الدخول للجلسة الجديدة...');
+                            page = await browser.newPage();
+                            await setupPage(page);
+                            
+                            console.log('🔐 تسجيل الدخول من الصفر...');
                             await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle0' });
                             await page.waitForSelector('input[type="text"]');
                             await page.type('input[type="text"]', BOSTA_USER);
@@ -210,7 +220,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
                             ]);
                             console.log('✅ تم تسجيل الدخول بنجاح، جاري استئناف التحميل...');
                         } catch (e) {
-                            console.log('❌ خطأ أثناء عمل Reset للجلسة:', e.message);
+                            console.log('❌ خطأ أثناء عمل Reset للمتصفح:', e.message);
                         }
                     } else {
                         console.log(`❌ فشل نهائي للجزء [${i + 1}] بعد ${maxAttempts} محاولات.`);
@@ -271,6 +281,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
         console.error('❌ خطأ:', error.message);
         process.exit(1);
     } finally {
-        await browser.close();
+        if (browser) await browser.close();
     }
 })();
