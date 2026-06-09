@@ -7,8 +7,10 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (إعادة تشغيل صارمة للمتصفح)';
+const PROJECT_NAME = 'بوسطة الشامل (بالتخطي الذكي)';
 // ===================================================
+
+let globalNoData = false; // متغير ذكي لاكتشاف الأيام الفارغة
 
 async function sendTelegramMsg(text) {
     if (!TELEGRAM_TOKEN || !CHAT_ID) return; 
@@ -63,9 +65,8 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nنظام الحماية مفعل: سيتم عمل Hard Reset للمتصفح بالكامل في حالة الحظر.');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل نظام التخطي الذكي للأيام الفارغة.');
 
-    // تحويل browser لـ let عشان نقدر نعمله إعادة تشغيل
     let browser = await puppeteer.launch({ 
         headless: true,
         args: [
@@ -79,7 +80,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
     
     let page = await browser.newPage();
     
-    // إعدادات الصفحة
     async function setupPage(p) {
         await p.setRequestInterception(true);
         p.on('request', (req) => {
@@ -89,7 +89,17 @@ function getDateChunks(totalDays = 60, interval = 5) {
                 req.continue();
             }
         });
-        p.on('dialog', async dialog => { await dialog.accept(); });
+        
+        // التقاط رسائل الموقع لمعرفة الأيام الفارغة
+        p.on('dialog', async dialog => { 
+            const msg = dialog.message() || '';
+            console.log(`💬 رسالة من بوسطة: ${msg}`);
+            if (msg.includes('بيانات') || msg.includes('لا توجد') || msg.includes('found') || msg.includes('No')) {
+                globalNoData = true;
+            }
+            await dialog.accept(); 
+        });
+        
         p.setDefaultTimeout(120000); 
         const client = await p.target().createCDPSession();
         await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
@@ -120,6 +130,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
             const maxAttempts = 4;
 
             while (!success && attempts < maxAttempts) {
+                globalNoData = false; // تصفير العداد لكل محاولة
                 attempts++;
                 console.log(`\n⏳ جاري سحب الجزء [${i + 1}/${chunks.length}]: من ${chunk.start} إلى ${chunk.end} (المحاولة ${attempts}/${maxAttempts})`);
 
@@ -152,6 +163,15 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         if(execBtn) execBtn.click();
                     }); 
                     
+                    // الانتظار قليلاً لرؤية إذا ظهرت رسالة "لا توجد بيانات"
+                    await new Promise(r => setTimeout(r, 4000));
+                    
+                    if (globalNoData) {
+                        console.log('⏩ مفيش شحنات في الـ 5 أيام دول (تخطي ذكي فوراً)...');
+                        success = true; // نعتبره نجاح عشان يروح للجزء اللي بعده
+                        break; 
+                    }
+                    
                     await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
                     console.log('✅ الجدول ظهر، طلب الملف...');
                     
@@ -166,7 +186,8 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         const filesAfter = fs.readdirSync(downloadPath);
                         if (filesAfter.length > filesBefore) {
                             const latestFile = filesAfter.find(f => 
-                                !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 1000
+                                // ⚠️ تم تقليل حجم الملف لـ 50 بايت لضمان سحب الملفات الصغيرة جداً
+                                !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 50
                             );
                             if (latestFile) {
                                 newFileName = latestFile;
@@ -183,18 +204,16 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         console.log(`📥 تم تحميل الجزء [${i + 1}] بنجاح!`);
                         success = true; 
                     } else {
-                        throw new Error("تأخر الملف (احتمال حظر من السيرفر)");
+                        // لو الجدول ظهر ومفيش رسالة بس الملف منزلش
+                        throw new Error("تأخر الملف (احتمال حظر من السيرفر أو الجدول فارغ بدون رسالة)");
                     }
 
                 } catch (error) {
                     console.log(`⚠️ المحاولة ${attempts} فشلت: ${error.message}`);
                     if (attempts < maxAttempts) {
-                        console.log('🔄 جاري عمل (Hard Reset): إغلاق المتصفح بالكامل وفتحه من جديد...');
+                        console.log('🔄 جاري عمل (Hard Reset)...');
                         try {
-                            // إغلاق المتصفح من الجذور
                             await browser.close(); 
-                            
-                            // تشغيل متصفح جديد تماماً
                             browser = await puppeteer.launch({ 
                                 headless: true,
                                 args: [
@@ -223,7 +242,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
                             console.log('❌ خطأ أثناء عمل Reset للمتصفح:', e.message);
                         }
                     } else {
-                        console.log(`❌ فشل نهائي للجزء [${i + 1}] بعد ${maxAttempts} محاولات.`);
+                        console.log(`❌ فشل نهائي للجزء [${i + 1}]. جاري التخطي...`);
                     }
                 }
             }
