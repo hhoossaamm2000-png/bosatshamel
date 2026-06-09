@@ -153,42 +153,48 @@ function getDateChunks(totalDays = 60, interval = 10) {
                 if(execBtn) execBtn.click();
             }); 
             
-            // انتظار تحميل الجدول
-            await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders', { timeout: 60000 });
-            await new Promise(r => setTimeout(r, 8000)); // وقت إضافي لضمان استقرار الشبكة
+            try {
+                // انتظار تحميل الجدول بحد أقصى 120 ثانية لتجنب التايم أوت
+                await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders', { timeout: 120000 });
+                await new Promise(r => setTimeout(r, 8000)); // وقت إضافي لضمان استقرار الشبكة
 
-            // تسجيل عدد الملفات قبل التحميل
-            const filesBefore = fs.readdirSync(downloadPath).length;
+                // تسجيل عدد الملفات قبل التحميل
+                const filesBefore = fs.readdirSync(downloadPath).length;
 
-            // طلب الإكسيل
-            await page.evaluate(() => {
-                if (typeof printFunc === 'function') printFunc('FollowUpOrdersXlsRep');
-            });
+                // طلب الإكسيل
+                await page.evaluate(() => {
+                    if (typeof printFunc === 'function') printFunc('FollowUpOrdersXlsRep');
+                });
 
-            // انتظار نزول الملف الجديد
-            let newFileName = null;
-            for (let t = 0; t < 60; t++) {
-                const filesAfter = fs.readdirSync(downloadPath);
-                if (filesAfter.length > filesBefore) {
-                    const latestFile = filesAfter.find(f => 
-                        !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 1000
-                    );
-                    if (latestFile) {
-                        newFileName = latestFile;
-                        break;
+                // انتظار نزول الملف الجديد
+                let newFileName = null;
+                for (let t = 0; t < 60; t++) {
+                    const filesAfter = fs.readdirSync(downloadPath);
+                    if (filesAfter.length > filesBefore) {
+                        const latestFile = filesAfter.find(f => 
+                            !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 1000
+                        );
+                        if (latestFile) {
+                            newFileName = latestFile;
+                            break;
+                        }
                     }
+                    await new Promise(r => setTimeout(r, 2000));
                 }
-                await new Promise(r => setTimeout(r, 2000));
-            }
 
-            if (newFileName) {
-                // إعادة تسمية الملف لتمييزه
-                const oldPath = path.join(downloadPath, newFileName);
-                const newPath = path.join(downloadPath, `chunk_${i + 1}_${Date.now()}.xls`);
-                fs.renameSync(oldPath, newPath);
-                console.log(`✅ تم تحميل: chunk_${i + 1} (${(fs.statSync(newPath).size/1024).toFixed(1)} KB)`);
-            } else {
-                console.log(`⚠️ فشل تحميل الجزء ${i + 1}، جاري التخطي...`);
+                if (newFileName) {
+                    // إعادة تسمية الملف لتمييزه
+                    const oldPath = path.join(downloadPath, newFileName);
+                    const newPath = path.join(downloadPath, `chunk_${i + 1}_${Date.now()}.xls`);
+                    fs.renameSync(oldPath, newPath);
+                    console.log(`✅ تم تحميل: chunk_${i + 1} (${(fs.statSync(newPath).size/1024).toFixed(1)} KB)`);
+                } else {
+                    console.log(`⚠️ فشل تحميل الجزء ${i + 1}، جاري التخطي...`);
+                }
+
+            } catch (error) {
+                console.log(`⚠️ الجدول مظهرش في الجزء ${i + 1} (ممكن مفيش داتا أو السيرفر تقيل جداً). هنتخطى الجزء ده ونكمل...`);
+                continue; // تخطي الخطأ وإكمال الفترة التالية
             }
         }
 
@@ -226,6 +232,12 @@ function getDateChunks(totalDays = 60, interval = 10) {
         const filesToUpload = fs.readdirSync(downloadPath)
                                 .filter(f => !f.endsWith('.crdownload'))
                                 .map(f => path.join(downloadPath, f));
+
+        if (filesToUpload.length === 0) {
+            console.log('⚠️ لم يتم تحميل أي ملفات خلال الفترات المحددة. سيتم إنهاء السكريبت.');
+            await sendTelegramMsg('⚠️ <b>تنبيه:</b> انتهى الفحص ولم يتم العثور على أي ملفات لرفعها.');
+            process.exit(0);
+        }
 
         console.log(`سيتم رفع عدد ${filesToUpload.length} ملفات...`);
         
