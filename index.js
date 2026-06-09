@@ -7,7 +7,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (نظام المحاولات الصارم)';
+const PROJECT_NAME = 'بوسطة الشامل (إعادة تشغيل صارمة للجلسة)';
 // ===================================================
 
 async function sendTelegramMsg(text) {
@@ -25,7 +25,6 @@ async function sendTelegramMsg(text) {
     }
 }
 
-// دالة تقسيم المدة لـ 5 أيام
 function getDateChunks(totalDays = 60, interval = 5) {
     const chunks = [];
     const endDate = new Date(); 
@@ -64,7 +63,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nجاري سحب التقرير بنظام المحاولات الصارم لتأكيد نزول كل الملفات.');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nنظام الحماية مفعل: سيتم عمل Hard Reset للجلسة في حالة حظر السيرفر.');
 
     const browser = await puppeteer.launch({ 
         headless: true,
@@ -77,22 +76,27 @@ function getDateChunks(totalDays = 60, interval = 5) {
         ] 
     });
     
-    const page = await browser.newPage();
-    
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-        if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-            req.abort();
-        } else {
-            req.continue();
-        }
-    });
+    // دالة مساعدة لإنشاء صفحة جديدة بالكامل مع إعداداتها
+    async function createNewPage() {
+        const newPage = await browser.newPage();
+        await newPage.setRequestInterception(true);
+        newPage.on('request', (req) => {
+            if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+        newPage.on('dialog', async dialog => { await dialog.accept(); });
+        newPage.setDefaultTimeout(120000); 
+        
+        const client = await newPage.target().createCDPSession();
+        await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
+        
+        return newPage;
+    }
 
-    page.on('dialog', async dialog => { await dialog.accept(); });
-    page.setDefaultTimeout(120000); 
-
-    const client = await page.target().createCDPSession();
-    await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
+    let page = await createNewPage();
 
     try {
         console.log('1️⃣ تسجيل الدخول الأول لبوسطة...');
@@ -114,7 +118,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
             const chunk = chunks[i];
             let success = false;
             let attempts = 0;
-            const maxAttempts = 4; // هيحاول 4 مرات في الجزء الواحد لو فشل
+            const maxAttempts = 4;
 
             while (!success && attempts < maxAttempts) {
                 attempts++;
@@ -122,19 +126,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
 
                 try {
                     await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
-
-                    // التأكد إن الجلسة مخرجتش، ولو خرجت يسجل دخول تاني
-                    const isLoginPage = await page.$('input[type="password"]');
-                    if (isLoginPage) {
-                        console.log('🔐 الجلسة معلقة، جاري تسجيل الدخول من جديد...');
-                        await page.type('input[type="text"]', BOSTA_USER);
-                        await page.type('input[type="password"]', BOSTA_PASS);
-                        await Promise.all([
-                            page.waitForNavigation({ waitUntil: 'networkidle2' }),
-                            page.keyboard.press('Enter')
-                        ]);
-                        await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
-                    }
 
                     await page.evaluate(() => {
                         window.open = function(url) {
@@ -164,8 +155,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
                     
                     await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
                     console.log('✅ الجدول ظهر، طلب الملف...');
-                    await new Promise(r => setTimeout(r, 12000)); 
-
+                    
                     const filesBefore = fs.readdirSync(downloadPath).length;
 
                     await page.evaluate(() => {
@@ -173,7 +163,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
                     });
 
                     let newFileName = null;
-                    for (let t = 0; t < 60; t++) { // انتظار دقيقتين للملف
+                    for (let t = 0; t < 60; t++) { 
                         const filesAfter = fs.readdirSync(downloadPath);
                         if (filesAfter.length > filesBefore) {
                             const latestFile = filesAfter.find(f => 
@@ -192,21 +182,38 @@ function getDateChunks(totalDays = 60, interval = 5) {
                         const newPath = path.join(downloadPath, `chunk_${i + 1}_${Date.now()}.xls`);
                         fs.renameSync(oldPath, newPath);
                         console.log(`📥 تم تحميل الجزء [${i + 1}] بنجاح!`);
-                        success = true; // نكسر الـ Loop وندخل في الجزء اللي بعده
+                        success = true; 
                     } else {
-                        throw new Error("الملف لم ينزل في الوقت المحدد");
+                        throw new Error("تأخر الملف (احتمال حظر من السيرفر)");
                     }
 
                 } catch (error) {
-                    console.log(`⚠️ المحاولة ${attempts} فشلت.`);
+                    console.log(`⚠️ المحاولة ${attempts} فشلت: ${error.message}`);
                     if (attempts < maxAttempts) {
-                        console.log('🔄 جاري تصفير الجلسة والمحاولة من جديد لضمان نزول الملف...');
+                        console.log('🔄 جاري عمل (Hard Reset): إغلاق الصفحة نهائياً وفتح جلسة جديدة من الصفر...');
                         try {
-                            // الذهاب للرئيسية لإجبار السيرفر على تصفير الذاكرة
-                            await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle0', timeout: 60000 });
-                        } catch (e) {}
+                            // 1. تدمير الصفحة الحالية بالكامل لقطع الاتصال
+                            await page.close(); 
+                            
+                            // 2. فتح صفحة جديدة بإعدادات نظيفة
+                            page = await createNewPage(); 
+                            
+                            // 3. تسجيل الدخول من جديد
+                            console.log('🔐 تسجيل الدخول للجلسة الجديدة...');
+                            await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle0' });
+                            await page.waitForSelector('input[type="text"]');
+                            await page.type('input[type="text"]', BOSTA_USER);
+                            await page.type('input[type="password"]', BOSTA_PASS);
+                            await Promise.all([
+                                page.waitForNavigation({ waitUntil: 'networkidle2' }),
+                                page.keyboard.press('Enter')
+                            ]);
+                            console.log('✅ تم تسجيل الدخول بنجاح، جاري استئناف التحميل...');
+                        } catch (e) {
+                            console.log('❌ خطأ أثناء عمل Reset للجلسة:', e.message);
+                        }
                     } else {
-                        console.log(`❌ فشل نهائي للجزء [${i + 1}] بعد ${maxAttempts} محاولات (غالباً لا توجد شحنات في هذه الـ 5 أيام).`);
+                        console.log(`❌ فشل نهائي للجزء [${i + 1}] بعد ${maxAttempts} محاولات.`);
                     }
                 }
             }
