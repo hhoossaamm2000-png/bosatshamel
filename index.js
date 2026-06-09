@@ -7,7 +7,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (آخر شهرين - 5 أيام)';
+const PROJECT_NAME = 'بوسطة الشامل (نظام المحاولات الصارم)';
 // ===================================================
 
 async function sendTelegramMsg(text) {
@@ -25,7 +25,7 @@ async function sendTelegramMsg(text) {
     }
 }
 
-// تعديل الدالة لتقسيم المدة لـ 5 أيام زي ما اقترحت
+// دالة تقسيم المدة لـ 5 أيام
 function getDateChunks(totalDays = 60, interval = 5) {
     const chunks = [];
     const endDate = new Date(); 
@@ -64,7 +64,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nجاري سحب تقرير آخر 60 يوم لجميع العملاء (مقسم 5 أيام).');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nجاري سحب التقرير بنظام المحاولات الصارم لتأكيد نزول كل الملفات.');
 
     const browser = await puppeteer.launch({ 
         headless: true,
@@ -89,13 +89,13 @@ function getDateChunks(totalDays = 60, interval = 5) {
     });
 
     page.on('dialog', async dialog => { await dialog.accept(); });
-    page.setDefaultTimeout(120000); // زيادة التايم أوت العام
+    page.setDefaultTimeout(120000); 
 
     const client = await page.target().createCDPSession();
     await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
 
     try {
-        console.log('1️⃣ تسجيل الدخول لبوسطة...');
+        console.log('1️⃣ تسجيل الدخول الأول لبوسطة...');
         await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle0' });
 
         await page.waitForSelector('input[type="text"]');
@@ -107,81 +107,108 @@ function getDateChunks(totalDays = 60, interval = 5) {
             page.keyboard.press('Enter')
         ]);
 
-        const chunks = getDateChunks(60, 5); // 5 أيام
+        const chunks = getDateChunks(60, 5); 
         console.log(`تم تقسيم الفترة إلى ${chunks.length} أجزاء (كل جزء 5 أيام).`);
 
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
-            console.log(`\n⏳ جاري سحب الجزء [${i + 1}/${chunks.length}]: من ${chunk.start} إلى ${chunk.end}`);
+            let success = false;
+            let attempts = 0;
+            const maxAttempts = 4; // هيحاول 4 مرات في الجزء الواحد لو فشل
 
-            // ⚠️ التعديل الجوهري: فتح الصفحة من جديد كل مرة لتنظيف الذاكرة وتجنب تهنيج السيرفر
-            await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
+            while (!success && attempts < maxAttempts) {
+                attempts++;
+                console.log(`\n⏳ جاري سحب الجزء [${i + 1}/${chunks.length}]: من ${chunk.start} إلى ${chunk.end} (المحاولة ${attempts}/${maxAttempts})`);
 
-            // إعادة حقن دالة التحميل بعد الـ Refresh
-            await page.evaluate(() => {
-                window.open = function(url) {
-                    const iframe = document.createElement('iframe');
-                    iframe.style.display = 'none';
-                    iframe.src = url;
-                    document.body.appendChild(iframe);
-                    return iframe.contentWindow;
-                };
-            });
+                try {
+                    await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
 
-            await page.evaluate((start, end) => {
-                const fromInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_From_Date');
-                const toInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_To_Date');
-                if(fromInput && toInput) {
-                    fromInput.value = start;
-                    fromInput.dispatchEvent(new Event('change', { bubbles: true }));
-                    toInput.value = end;
-                    toInput.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }, chunk.start, chunk.end);
-
-            await page.evaluate(() => {
-                const execBtn = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs');
-                if(execBtn) execBtn.click();
-            }); 
-            
-            try {
-                // ⚠️ استخدام طريقة الكود القديم لضمان إيجاد الجدول
-                await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
-                console.log('✅ الجدول ظهر، انتظار التحميل الكامل...');
-                await new Promise(r => setTimeout(r, 15000)); // وقت إضافي لضمان استقرار الداتا الكبيرة
-
-                const filesBefore = fs.readdirSync(downloadPath).length;
-
-                await page.evaluate(() => {
-                    if (typeof printFunc === 'function') printFunc('FollowUpOrdersXlsRep');
-                });
-
-                let newFileName = null;
-                for (let t = 0; t < 60; t++) {
-                    const filesAfter = fs.readdirSync(downloadPath);
-                    if (filesAfter.length > filesBefore) {
-                        const latestFile = filesAfter.find(f => 
-                            !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 1000
-                        );
-                        if (latestFile) {
-                            newFileName = latestFile;
-                            break;
-                        }
+                    // التأكد إن الجلسة مخرجتش، ولو خرجت يسجل دخول تاني
+                    const isLoginPage = await page.$('input[type="password"]');
+                    if (isLoginPage) {
+                        console.log('🔐 الجلسة معلقة، جاري تسجيل الدخول من جديد...');
+                        await page.type('input[type="text"]', BOSTA_USER);
+                        await page.type('input[type="password"]', BOSTA_PASS);
+                        await Promise.all([
+                            page.waitForNavigation({ waitUntil: 'networkidle2' }),
+                            page.keyboard.press('Enter')
+                        ]);
+                        await page.goto('https://bosatexpress.com/FollowUpOrdersRep', { waitUntil: 'networkidle2' });
                     }
-                    await new Promise(r => setTimeout(r, 2000));
-                }
 
-                if (newFileName) {
-                    const oldPath = path.join(downloadPath, newFileName);
-                    const newPath = path.join(downloadPath, `chunk_${i + 1}_${Date.now()}.xls`);
-                    fs.renameSync(oldPath, newPath);
-                    console.log(`📥 تم تحميل الجزء بنجاح!`);
-                } else {
-                    console.log(`⚠️ فشل تحميل الجزء، جاري التخطي...`);
-                }
+                    await page.evaluate(() => {
+                        window.open = function(url) {
+                            const iframe = document.createElement('iframe');
+                            iframe.style.display = 'none';
+                            iframe.src = url;
+                            document.body.appendChild(iframe);
+                            return iframe.contentWindow;
+                        };
+                    });
 
-            } catch (error) {
-                console.log(`⚠️ الجدول مظهرش (مفيش شحنات أو السيرفر تقيل). هنتخطى ونكمل...`);
+                    await page.evaluate((start, end) => {
+                        const fromInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_From_Date');
+                        const toInput = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_Txt_To_Date');
+                        if(fromInput && toInput) {
+                            fromInput.value = start;
+                            fromInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            toInput.value = end;
+                            toInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }, chunk.start, chunk.end);
+
+                    await page.evaluate(() => {
+                        const execBtn = document.querySelector('#ArMainContent_UcFollowUpOrdersReport_LnkExecs');
+                        if(execBtn) execBtn.click();
+                    }); 
+                    
+                    await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
+                    console.log('✅ الجدول ظهر، طلب الملف...');
+                    await new Promise(r => setTimeout(r, 12000)); 
+
+                    const filesBefore = fs.readdirSync(downloadPath).length;
+
+                    await page.evaluate(() => {
+                        if (typeof printFunc === 'function') printFunc('FollowUpOrdersXlsRep');
+                    });
+
+                    let newFileName = null;
+                    for (let t = 0; t < 60; t++) { // انتظار دقيقتين للملف
+                        const filesAfter = fs.readdirSync(downloadPath);
+                        if (filesAfter.length > filesBefore) {
+                            const latestFile = filesAfter.find(f => 
+                                !f.endsWith('.crdownload') && fs.statSync(path.join(downloadPath, f)).size > 1000
+                            );
+                            if (latestFile) {
+                                newFileName = latestFile;
+                                break;
+                            }
+                        }
+                        await new Promise(r => setTimeout(r, 2000));
+                    }
+
+                    if (newFileName) {
+                        const oldPath = path.join(downloadPath, newFileName);
+                        const newPath = path.join(downloadPath, `chunk_${i + 1}_${Date.now()}.xls`);
+                        fs.renameSync(oldPath, newPath);
+                        console.log(`📥 تم تحميل الجزء [${i + 1}] بنجاح!`);
+                        success = true; // نكسر الـ Loop وندخل في الجزء اللي بعده
+                    } else {
+                        throw new Error("الملف لم ينزل في الوقت المحدد");
+                    }
+
+                } catch (error) {
+                    console.log(`⚠️ المحاولة ${attempts} فشلت.`);
+                    if (attempts < maxAttempts) {
+                        console.log('🔄 جاري تصفير الجلسة والمحاولة من جديد لضمان نزول الملف...');
+                        try {
+                            // الذهاب للرئيسية لإجبار السيرفر على تصفير الذاكرة
+                            await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle0', timeout: 60000 });
+                        } catch (e) {}
+                    } else {
+                        console.log(`❌ فشل نهائي للجزء [${i + 1}] بعد ${maxAttempts} محاولات (غالباً لا توجد شحنات في هذه الـ 5 أيام).`);
+                    }
+                }
             }
         }
 
@@ -222,12 +249,12 @@ function getDateChunks(totalDays = 60, interval = 5) {
             process.exit(0);
         }
 
-        console.log(`سيتم رفع عدد ${filesToUpload.length} ملفات...`);
+        console.log(`سيتم رفع عدد ${filesToUpload.length} ملفات دفعة واحدة...`);
         
         await fileInput.uploadFile(...filesToUpload);
         await targetFrame.$eval('button[onclick="processFiles()"]', btn => btn.click());
 
-        console.log('⏳ انتظار معالجة الملفات...');
+        console.log('⏳ انتظار معالجة ودمج الملفات...');
         await new Promise(r => setTimeout(r, 120000)); 
         
         console.log('🎉 تم الرفع بنجاح!');
