@@ -1,0 +1,12 @@
+{
+  "name": "bosatshamel",
+  "version": "1.0.0",
+  "description": "Bosta Shamel Automation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  }
+}
