@@ -2,14 +2,17 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 
-// ================= إعدادات التليجرام والمشروع =================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'ضع_التوكن_هنا_أو_في_بيئة_العمل'; 
-const CHAT_ID = process.env.CHAT_ID || '202909633'; 
+// ================= إعدادات البيئة (مخفية) =================
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || ''; 
+const CHAT_ID = process.env.CHAT_ID || ''; 
+const BOSTA_USER = process.env.BOSTA_USER || '';
+const BOSTA_PASS = process.env.BOSTA_PASS || '';
 const PROJECT_NAME = 'بوسطة الشامل (آخر شهرين مقسمة)';
 // ===============================================================
 
 // دالة إرسال رسائل التليجرام
 async function sendTelegramMsg(text) {
+    if (!TELEGRAM_TOKEN || !CHAT_ID) return; // تخطي لو مفيش بيانات تليجرام
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
         const formattedMsg = `🔔 <b>${PROJECT_NAME}</b>\n${text}`;
@@ -47,6 +50,11 @@ function getDateChunks(totalDays = 60, interval = 10) {
 }
 
 (async () => {
+    if (!BOSTA_USER || !BOSTA_PASS) {
+        console.error('❌ خطأ: لم يتم العثور على بيانات الدخول لبوسطة في الإعدادات المخفية.');
+        process.exit(1);
+    }
+
     const downloadPath = path.resolve(__dirname, 'downloads');
     
     // تنظيف مجلد التحميل قبل البدء
@@ -94,8 +102,10 @@ function getDateChunks(totalDays = 60, interval = 10) {
         await page.goto('https://bosatexpress.com/home', { waitUntil: 'networkidle0' });
 
         await page.waitForSelector('input[type="text"]');
-        await page.type('input[type="text"]', 'admin1');
-        await page.type('input[type="password"]', 'Hh100100');
+        
+        // استخدام المتغيرات المخفية هنا
+        await page.type('input[type="text"]', BOSTA_USER);
+        await page.type('input[type="password"]', BOSTA_PASS);
 
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2' }),
@@ -219,7 +229,7 @@ function getDateChunks(totalDays = 60, interval = 10) {
 
         console.log(`سيتم رفع عدد ${filesToUpload.length} ملفات...`);
         
-        // تمرير جميع الملفات كـ Array للرفع المجمع (Multiple)
+        // تمرير جميع الملفات للرفع
         await fileInput.uploadFile(...filesToUpload);
         
         // الضغط على زر الدمج والرفع
