@@ -7,12 +7,11 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || '';
 const CHAT_ID = process.env.CHAT_ID || ''; 
 const BOSTA_USER = process.env.BOSTA_USER || '';
 const BOSTA_PASS = process.env.BOSTA_PASS || '';
-const PROJECT_NAME = 'بوسطة الشامل (بالمراقبة المصورة)';
+const PROJECT_NAME = 'بوسطة الشامل (بالمراقبة المصورة - الشكل الطبيعي)';
 // ===================================================
 
 let globalNoData = false; 
 
-// دالة إرسال الرسائل النصية
 async function sendTelegramMsg(text) {
     if (!TELEGRAM_TOKEN || !CHAT_ID) return; 
     try {
@@ -28,7 +27,6 @@ async function sendTelegramMsg(text) {
     }
 }
 
-// دالة تصوير الشاشة وإرسالها للتليجرام
 async function sendTelegramPhoto(imagePath, captionText) {
     if (!TELEGRAM_TOKEN || !CHAT_ID) return;
     try {
@@ -48,7 +46,6 @@ async function sendTelegramPhoto(imagePath, captionText) {
             body: formData
         });
         
-        // مسح الصورة بعد إرسالها عشان منمليش مساحة السيرفر
         fs.unlinkSync(imagePath);
     } catch (e) {
         console.error('خطأ في إرسال الصورة:', e.message);
@@ -93,7 +90,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
         });
     }
 
-    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل المراقبة المصورة للخطوات.');
+    await sendTelegramMsg('🚀 <b>بدأ التنفيذ...</b>\nتم تفعيل المراقبة المصورة (الشكل الطبيعي للموقع).');
 
     let browser = await puppeteer.launch({ 
         headless: true,
@@ -101,9 +98,9 @@ function getDateChunks(totalDays = 60, interval = 5) {
             '--no-sandbox', 
             '--disable-setuid-sandbox', 
             '--disable-web-security',
-            '--disable-images',
+            // شيلنا الـ --disable-images من هنا عشان الصور تظهر
             '--max-old-space-size=6144',
-            '--window-size=1280,800' // تحديد حجم الشاشة عشان الصور تطلع واضحة
+            '--window-size=1280,800'
         ],
         defaultViewport: { width: 1280, height: 800 }
     });
@@ -111,14 +108,7 @@ function getDateChunks(totalDays = 60, interval = 5) {
     let page = await browser.newPage();
     
     async function setupPage(p) {
-        await p.setRequestInterception(true);
-        p.on('request', (req) => {
-            if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
+        // شيلنا الكود اللي كان بيمنع الـ CSS والصور
         
         p.on('dialog', async dialog => { 
             const msg = dialog.message() || '';
@@ -149,7 +139,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
             page.keyboard.press('Enter')
         ]);
 
-        // تصوير شاشة النجاح في تسجيل الدخول
         const loginPicPath = path.join(downloadPath, 'login.png');
         await page.screenshot({ path: loginPicPath });
         await sendTelegramPhoto(loginPicPath, '✅ تم تسجيل الدخول لبوسطة بنجاح.');
@@ -209,7 +198,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
                     await page.waitForSelector('#ArMainContent_UcFollowUpOrdersReport_GrdOrders, [id*="GrdOrders"], table', { timeout: 90000 });
                     console.log('✅ الجدول ظهر، طلب الملف...');
                     
-                    // تصوير الجدول قبل التحميل
                     const tablePicPath = path.join(downloadPath, `table_${i}.png`);
                     await page.screenshot({ path: tablePicPath });
                     await sendTelegramPhoto(tablePicPath, `✅ الجدول ظهر لـ ${partMsg}`);
@@ -248,7 +236,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
                 } catch (error) {
                     console.log(`⚠️ المحاولة ${attempts} فشلت: ${error.message}`);
                     
-                    // تصوير الشاشة وقت الخطأ
                     const errorPicPath = path.join(downloadPath, `error_${i}_${attempts}.png`);
                     await page.screenshot({ path: errorPicPath });
                     await sendTelegramPhoto(errorPicPath, `⚠️ خطأ في ${partMsg}\n<code>${error.message}</code>`);
@@ -264,7 +251,6 @@ function getDateChunks(totalDays = 60, interval = 5) {
                                     '--no-sandbox', 
                                     '--disable-setuid-sandbox', 
                                     '--disable-web-security',
-                                    '--disable-images',
                                     '--max-old-space-size=6144',
                                     '--window-size=1280,800'
                                 ],
@@ -299,9 +285,8 @@ function getDateChunks(totalDays = 60, interval = 5) {
         await page.goto('https://script.google.com/macros/s/AKfycbyca-1Xqh_69GQ8LgEqcNys6ZZ7UpwwwVK1I5-Q-CsrjTjpnndn6fHBeWNnyEcIDUk/exec', { 
             waitUntil: 'networkidle2' 
         });
-        await new Promise(r => setTimeout(r, 8000)); // وقت إضافي لتحميل الفريمات
+        await new Promise(r => setTimeout(r, 8000)); 
 
-        // تصوير صفحة الرفع
         const gscriptPicPath = path.join(downloadPath, 'gscript.png');
         await page.screenshot({ path: gscriptPicPath });
         await sendTelegramPhoto(gscriptPicPath, '🔄 تم فتح صفحة الرفع وجاري تجهيز الملفات...');
